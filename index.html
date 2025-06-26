@@ -29,7 +29,7 @@
             margin-bottom: 5px;
             font-weight: bold;
         }
-        input[type="text"] {
+        input[type="text"], select {
             width: 100%;
             padding: 8px;
             box-sizing: border-box;
@@ -69,11 +69,13 @@
             <h3>使用说明：</h3>
             <ol>
                 <li>在下方文本框中输入名单（可带序号或不带序号）</li>
+                <li>选择左右区域的列数（8列或9列）</li>
                 <li>设置左、中、右三个区域的序号范围（如：1-30）</li>
+                <li>可选：填写不来人员名单和固定座位安排</li>
                 <li>点击"生成排座表"按钮</li>
                 <li>系统将自动下载Excel排座表</li>
             </ol>
-            <p><strong>✅ 已实现的增强功能：</strong></p>
+            <p><strong>✅ 已实现的功能：</strong></p>
             <ul>
                 <li>✅ 主席台和校领导单元格自动合并</li>
                 <li>✅ 主席台背景设置为灰色</li>
@@ -81,6 +83,9 @@
                 <li>✅ 统一设置列宽8.04和行高15.95</li>
                 <li>✅ 所有文字使用仿宋_GB2312字体，12号大小</li>
                 <li>✅ 所有内容居中对齐显示</li>
+                <li>✅ 左右区域列数选择（8列/9列）</li>
+                <li>✅ 不来人员自动跳过</li>
+                <li>✅ 固定座位安排</li>
             </ul>
             <p><strong>技术说明：</strong>使用 xlsx-js-style 库替代原生xlsx库，完美支持Excel样式设置</p>
         </div>
@@ -92,6 +97,14 @@
 2 李四
 王五
 赵六"></textarea>
+        </div>
+        
+        <div class="input-group">
+            <label for="columnMode">左右区域列数选择：</label>
+            <select id="columnMode">
+                <option value="9">9列（B列和U列正常排座）</option>
+                <option value="8">8列（B列和U列不排座）</option>
+            </select>
         </div>
         
         <div class="area-inputs">
@@ -109,6 +122,20 @@
             </div>
         </div>
         
+        <div class="input-group">
+            <label for="absentList">不来人员名单（每行一个，格式：序号 姓名）：</label>
+            <textarea id="absentList" placeholder="例如：
+5 张三
+12 李四"></textarea>
+        </div>
+        
+        <div class="input-group">
+            <label for="fixedSeats">固定座位安排（每行一个，格式：序号 姓名 座位）：</label>
+            <textarea id="fixedSeats" placeholder="例如：
+11 陈小飞 N7
+25 王五 C5"></textarea>
+        </div>
+        
         <button id="generateBtn">生成排座表</button>
     </div>
 
@@ -117,9 +144,12 @@
         
         function generateSeatingChart() {
             const nameListText = document.getElementById('nameList').value.trim();
+            const columnMode = document.getElementById('columnMode').value;
             const leftRange = document.getElementById('leftArea').value.trim();
             const centerRange = document.getElementById('centerArea').value.trim();
             const rightRange = document.getElementById('rightArea').value.trim();
+            const absentListText = document.getElementById('absentList').value.trim();
+            const fixedSeatsText = document.getElementById('fixedSeats').value.trim();
             
             const nameList = parseNameList(nameListText);
             if (!nameList) {
@@ -136,11 +166,14 @@
                 return;
             }
             
+            const absentList = parseAbsentList(absentListText);
+            const fixedSeats = parseFixedSeats(fixedSeatsText);
+            
             const wb = XLSX.utils.book_new();
-            const wsData = createWorksheetData(nameList, leftRangeNumbers, centerRangeNumbers, rightRangeNumbers);
+            const wsData = createWorksheetData(nameList, leftRangeNumbers, centerRangeNumbers, rightRangeNumbers, columnMode, absentList, fixedSeats);
             const ws = XLSX.utils.aoa_to_sheet(wsData);
             
-            setWorksheetProperties(ws);
+            setWorksheetProperties(ws, columnMode);
             
             XLSX.utils.book_append_sheet(wb, ws, "排座表");
             XLSX.writeFile(wb, "排座表.xlsx", {cellStyles: true});
@@ -178,7 +211,73 @@
             return { start, end };
         }
         
-        function createWorksheetData(nameList, leftRange, centerRange, rightRange) {
+        function parseAbsentList(text) {
+            if (!text) return [];
+            
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            const result = [];
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                const match = trimmed.match(/^(\d+)[\s\t]+(.+)$/);
+                
+                if (match) {
+                    const number = parseInt(match[1]);
+                    const name = match[2].trim();
+                    result.push({ number, name });
+                }
+            }
+            
+            return result;
+        }
+        
+        function parseFixedSeats(text) {
+            if (!text) return [];
+            
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            const result = [];
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                const match = trimmed.match(/^(\d+)[\s\t]+(.+?)[\s\t]+([A-Z]+\d+)$/);
+                
+                if (match) {
+                    const number = parseInt(match[1]);
+                    const name = match[2].trim();
+                    const seat = match[3].trim().toUpperCase();
+                    result.push({ number, name, seat });
+                }
+            }
+            
+            return result;
+        }
+        
+        function seatToPosition(seat) {
+            // 将座位字符串（如N7）转换为行列坐标
+            const match = seat.match(/^([A-Z]+)(\d+)$/);
+            if (!match) return null;
+            
+            const colStr = match[1];
+            const rowNum = parseInt(match[2]);
+            
+            // 将列字母转换为列索引（A=0, B=1, ...）
+            let col = 0;
+            for (let i = 0; i < colStr.length; i++) {
+                col = col * 26 + (colStr.charCodeAt(i) - 65 + 1);
+            }
+            col--; // 转换为0索引
+            
+            const row = rowNum - 1; // 转换为0索引
+            
+            // 检查坐标是否在有效范围内
+            if (row < 0 || row >= 16 || col < 0 || col >= 29) {
+                return null;
+            }
+            
+            return { row, col };
+        }
+        
+        function createWorksheetData(nameList, leftRange, centerRange, rightRange, columnMode, absentList, fixedSeats) {
             const rows = 16;
             const cols = 29;
             const wsData = Array(rows).fill().map(() => Array(cols).fill(''));
@@ -197,44 +296,67 @@
             
             wsData[4][11] = "校领导";
             
-            assignSeats(wsData, nameList, leftRange, 'left');
-            assignSeats(wsData, nameList, centerRange, 'center');
-            assignSeats(wsData, nameList, rightRange, 'right');
+            // 先处理固定座位
+            const occupiedSeats = new Set();
+            const fixedSeatNumbers = new Set(); // 新增：记录已固定座位的人员序号
+            for (const fixedSeat of fixedSeats) {
+                const position = seatToPosition(fixedSeat.seat);
+                if (position) {
+                    wsData[position.row][position.col] = fixedSeat.name;
+                    occupiedSeats.add(`${position.row},${position.col}`);
+                    fixedSeatNumbers.add(fixedSeat.number); // 记录固定座位人员的序号
+                }
+            }
+            
+            // 创建不来人员的序号集合
+            const absentNumbers = new Set(absentList.map(item => item.number));
+            
+            assignSeats(wsData, nameList, leftRange, 'left', columnMode, absentNumbers, occupiedSeats, fixedSeatNumbers);
+            assignSeats(wsData, nameList, centerRange, 'center', columnMode, absentNumbers, occupiedSeats, fixedSeatNumbers);
+            assignSeats(wsData, nameList, rightRange, 'right', columnMode, absentNumbers, occupiedSeats, fixedSeatNumbers);
             
             return wsData;
         }
         
-        function assignSeats(wsData, nameList, range, area) {
+        function assignSeats(wsData, nameList, range, area, columnMode, absentNumbers, occupiedSeats, fixedSeatNumbers) {
+            // 过滤出当前区域的人员，排除不来的人员和已固定座位的人员
             const areaNames = nameList
                 .filter(item => item.number >= range.start && item.number <= range.end)
+                .filter(item => !absentNumbers.has(item.number))
+                .filter(item => !fixedSeatNumbers.has(item.number)) // 新增：排除已固定座位的人员
                 .sort((a, b) => a.number - b.number);
             
             let startRow, startCol, cols;
             
             if (area === 'left') {
                 startRow = 4;
-                startCol = 1;
-                cols = 9;
+                startCol = columnMode === '9' ? 1 : 2; // 9列模式从B列开始，8列模式从C列开始
+                cols = columnMode === '9' ? 9 : 8;
             } else if (area === 'center') {
                 startRow = 5;
                 startCol = 11;
-                cols = 8;
+                cols = 8; // 中间区域始终是8列
             } else {
                 startRow = 4;
-                startCol = 20;
-                cols = 9;
+                startCol = columnMode === '9' ? 20 : 21; // 9列模式从U列开始，8列模式从V列开始
+                cols = columnMode === '9' ? 9 : 8;
             }
             
             let index = 0;
-            for (let row = startRow; row < startRow + 12; row++) {
+            for (let row = startRow; row < startRow + 12 && index < areaNames.length; row++) {
                 for (let col = startCol; col < startCol + cols && index < areaNames.length; col++) {
+                    // 跳过已被固定座位占用的位置
+                    if (occupiedSeats.has(`${row},${col}`)) {
+                        continue;
+                    }
+                    
                     wsData[row][col] = areaNames[index].name;
                     index++;
                 }
             }
         }
         
-        function setWorksheetProperties(ws) {
+        function setWorksheetProperties(ws, columnMode) {
             // 设置列宽 - 所有列都设置为8.04字符宽度
             ws['!cols'] = Array(29).fill().map(() => ({wch: 8.04}));
             
@@ -248,10 +370,10 @@
             ];
             
             // 设置所有单元格的默认样式
-            setupAllCellStyles(ws);
+            setupAllCellStyles(ws, columnMode);
         }
         
-        function setupAllCellStyles(ws) {
+        function setupAllCellStyles(ws, columnMode) {
             // 定义默认样式
             const defaultFont = {name: "仿宋_GB2312", sz: 12};
             const centerAlignment = {horizontal: "center", vertical: "center"};
@@ -329,10 +451,15 @@
             // 5. 为校领导区域添加边框（L5:S5）
             addBorderToArea(ws, 4, 11, 4, 18, borderStyle); // 校领导区域 L5:S5
             
-            // 6. 为三个排座区域添加边框
-            addBorderToArea(ws, 4, 1, 15, 9, borderStyle);   // 左边区域 B5:J16
-            addBorderToArea(ws, 5, 11, 15, 18, borderStyle); // 中间区域 L6:S16
-            addBorderToArea(ws, 4, 20, 15, 28, borderStyle); // 右边区域 U5:AC16
+            // 6. 为三个排座区域添加边框（根据列数模式调整）
+            if (columnMode === '9') {
+                addBorderToArea(ws, 4, 1, 15, 9, borderStyle);   // 左边区域 B5:J16 (9列)
+                addBorderToArea(ws, 4, 20, 15, 28, borderStyle); // 右边区域 U5:AC16 (9列)
+            } else {
+                addBorderToArea(ws, 4, 2, 15, 9, borderStyle);   // 左边区域 C5:J16 (8列)
+                addBorderToArea(ws, 4, 21, 15, 28, borderStyle); // 右边区域 V5:AC16 (8列)
+            }
+            addBorderToArea(ws, 5, 11, 15, 18, borderStyle); // 中间区域 L6:S16 (始终8列)
         }
         
         function addBorderToArea(ws, startRow, startCol, endRow, endCol, borderStyle) {
